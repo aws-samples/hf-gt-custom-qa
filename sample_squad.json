@@ -1,0 +1,26 @@
+{
+  "version": "v2.0",
+  "data": [
+    {
+      "title": "Ground Truth Marketing",
+      "paragraphs": [
+        {
+          "qas": [],
+          "context": "SageMaker Ground Truth helps improve the quality of labels through annotation consolidation and audit workflows. Annotation consolidation is the process of collecting label inputs from two or more data labelers and combining them to create a single data label for your machine learning model. With built-in audit and review workflows, workers can perform label verification and make adjustments to improve accuracy."
+        },
+        {
+          "qas": [],
+          "context": "SageMaker Ground Truth provides automated labeling features such as ‘auto-segment’, ‘automatic 3D cuboid snapping’, and ‘sensor fusion with 2D video frames’ through an intuitive user interface in order to reduce the time needed for data labeling tasks while also improving quality. For semantic segmentation, workers must label objects in an image. Using the auto-segment feature, workers can capture the object with 4 clicks vs. hundreds."
+        },
+        {
+          "qas": [],
+          "context": "SageMaker Ground Truth offers automatic data labeling. Using an active learning model, data is labeled and only routed to humans if the model cannot confidently label it. The human-labeled data is then used to train the machine learning model to improve its' accuracy. As a result, less data is then sent to humans in the next round of labeling which lowers data labeling costs by up to 70%."
+        },
+        {
+          "qas": [],
+          "context": "SageMaker Ground Truth provides options to work with labelers inside and outside of your organization. Using SageMaker Ground Truth, you can easily send labeling jobs to your own labelers or you can access a workforce of over 500,000 independent contractors who are already performing machine learning related tasks through Amazon Mechanical Turk. If your data requires confidentiality or special skills, you can use vendors pre-screened by AWS for quality and security procedures, including iVision, CapeStart Inc., Cogito, and iMerit."
+        }
+      ]
+    }
+  ]
+}

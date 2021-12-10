@@ -1,0 +1,192 @@
+# Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SQuAD SageMaker Ground Truth Annotator
+
+Parameters:
+  Prefix:
+    Type: String
+    Description: Prefix of all resources deployed in this solution.
+    Default: gt-hf-squad
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  ConsolidationLambdaSMGTExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}-consolidation-lambda-smgt-execution-role"
+      AssumeRolePolicyDocument: !Sub |
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": ["lambda.amazonaws.com"]
+                    },
+                    "Action": ["sts:AssumeRole"]
+                }
+            ]
+        }
+      Policies:
+        - PolicyName: !Sub ${Prefix}-ConsolidationLambdaSMGTExecutionRole-s3-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub arn:aws:s3:::${Prefix}-${AWS::AccountId}-${AWS::Region}-squad-sagemaker-input/*
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  PrelabelingLambdaSMGTExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}-pre-labeling-lambda-smgt-execution-role"
+      AssumeRolePolicyDocument: !Sub |
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": ["lambda.amazonaws.com"]
+                    },
+                    "Action": ["sts:AssumeRole"]
+                }
+            ]
+        }
+      Policies:
+        - PolicyName: !Sub ${Prefix}-PrelabelingLambdaSMGTExecutionRole-s3-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub arn:aws:s3:::${Prefix}-${AWS::AccountId}-${AWS::Region}-squad-sagemaker-input/*
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  LabelerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Effect: Allow
+            Sid: ""
+      RoleName: !Sub ${Prefix}-labeler-execution-role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerGroundTruthExecution
+      MaxSessionDuration: 43200
+  NotebookRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Effect: Allow
+            Sid: ""
+      RoleName: !Sub ${Prefix}-notebook-role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      MaxSessionDuration: 43200
+  PreLabelTaskLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Prefix}-sagemaker-pre-label-task"
+      CodeUri: lambda_src/
+      Handler: pre_label_task_lambda.lambda_handler
+      Runtime: python3.8
+      Role: !GetAtt PrelabelingLambdaSMGTExecutionRole.Arn
+  PostLabelTaskLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Prefix}-sagemaker-post-label-task"
+      CodeUri: lambda_src/
+      Handler: post_label_task_lambda.lambda_handler
+      Runtime: python3.8
+      Role: !GetAtt ConsolidationLambdaSMGTExecutionRole.Arn
+
+
+  CodeNotebookLifeCycleConfig:
+    Type: AWS::SageMaker::NotebookInstanceLifecycleConfig
+    Properties:
+      OnStart:
+        - Content:
+            Fn::Base64: !Sub |
+                #!/usr/bin/env python3
+
+                # This script passes any required args from the environment into the notebook.
+                # SageMaker Ground Truth requires special bucket settings, pre/post lambdas,
+                # and a well configured execution role to work, so rather than asking a user
+                # to generate all of this, generate in cloudformation and pass into notebook.
+
+                import json
+
+                config = {
+                  "PreLabelTaskLambdaArn": "${PreLabelTaskLambda.Arn}",
+                  "PreLabelTaskLambdaArn": "${PostLabelTaskLambda.Arn}",
+                  "LabelingJobInputBucket": "${LabelingJobInputBucket.Arn}",
+                  "LabelerExecutionRoleArn": "${LabelerExecutionRole.Arn}",
+                }
+                print("Configuration variables:", config)
+                filename = "/home/ec2-user/SageMaker/gt-hf-squad-config.json"
+                print(f"Writing configuration to {filename}")
+                with open(filename, "w") as f:
+                  json.dump(config, f)
+
+  CodeNotebookInstance:
+    Type: AWS::SageMaker::NotebookInstance
+    Properties:
+      # TODO: Clone AWS samples when we have it ready.
+      # DefaultCodeRepository: String
+      InstanceType: ml.t2.medium
+      LifecycleConfigName: !GetAtt CodeNotebookLifeCycleConfig.NotebookInstanceLifecycleConfigName
+      NotebookInstanceName: !Sub ${Prefix}-notebook
+      PlatformIdentifier: notebook-al2-v1
+      RoleArn: !GetAtt NotebookRole.Arn
+      VolumeSizeInGB: 50
+  LabelingJobInputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${Prefix}-${AWS::AccountId}-${AWS::Region}-squad-sagemaker-input
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, PUT, POST, HEAD]
+            AllowedOrigins: ["*"]
+            ExposedHeaders: [Etag]
+            MaxAge: 3000
+Outputs:
+  PreLabelTaskLambdaArn:
+    Description: "PreLabeling function ARN for use in SageMaker Ground Truth"
+    Value: !GetAtt PreLabelTaskLambda.Arn
+  PostLabelTaskLambdaArn:
+    Description: "PostLabeling function ARN for use in SageMaker Ground Truth"
+    Value: !GetAtt PostLabelTaskLambda.Arn
+  LabelingJobBucketName:
+    Description: "Bucket with appropriate CORS to serve as input bucket"
+    Value: !Ref LabelingJobInputBucket
+  LabelerExecutionRoleArn:
+    Description: "Role to use with create_labeling_job API in SageMaker Ground Truth"
+    Value: !GetAtt LabelerExecutionRole.Arn
+

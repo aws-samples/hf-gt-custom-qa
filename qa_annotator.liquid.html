@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<!-- Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<html lang="en">
+  <head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta1/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-giJF6kkoqNQ00vy+HMDP7azOuL0xtbfIcaT9wjKHr8RbDVddVHyTfAAsrekwKmP1"
+      crossorigin="anonymous"
+    />
+
+    <!-- Amazon Crowd Elements -->
+    <script src="https://assets.crowd.aws/crowd-html-elements.js"></script>
+
+    <title>Annotator</title>
+
+    <style>
+      mark {
+        background: orange;
+        color: black;
+      }
+
+      .modal-dialog {
+        margin-left: 5vw;
+      }
+
+      .accordion-disabled::after {
+        content: none;
+      }
+
+      .accordion-button:not(.collapsed) {
+        background-color: #0d6efd !important;
+        color: #fff;
+      }
+
+      .accordion-button:not(.collapsed)::after {
+        content: none;
+      }
+
+      .accordion-body {
+        background-color: #a1d0ff;
+      }
+      progress {
+        width: 70px;
+        height: 30px;
+      }
+    </style>
+  </head>
+  <body>
+    <crowd-form>
+      <div style="height: 100vh; width: 100vw" id="root"></div>
+      <div style="display: none">
+        <crowd-button form-action="submit">Submit</crowd-button>
+      </div>
+      <input type="hidden" id="submission" name="submission" />
+    </crowd-form>
+
+    <!-- Bootstrap dependencies -->
+    <script
+      src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+      integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"
+      integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"
+      integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta1/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-ygbV9kiqUc6oa4msXn9868pTtWMgiQaeYH7/t7LECLbyPA2x65Kgf80OJFdroafW"
+      crossorigin="anonymous"
+    ></script>
+
+    <!-- Non-module JS dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mark.js/8.11.1/mark.min.js"></script>
+
+    <!-- Dummy input element used to store json to render, will be replaced by liquid. -->
+
+    <!-- prettier-ignore -->
+    <div style="display: none" id="json_sample">{{ task.input.source }}</div>
+
+    <!-- Business Logic -->
+    <script type="text/javascript">
+      // Modularized JS dependencies
+      import("https://unpkg.com/lit-html?module").then(({ html, render }) => {
+        console.log("Annotator: Input HTML loading");
+        // Read input data.
+        const inputHtml = document.getElementById("json_sample").innerHTML;
+        const inputSquad = JSON.parse(inputHtml);
+
+        console.log("Annotator: Input HTML parsed");
+        const root = document.getElementById("root");
+        let markInstance = null;
+
+        // This is an article annotation task object, we directly use Squad 2.0 format
+        // as our data format for ease of development.
+        let state = {
+          selectedQaInd: null,
+          selectedAnswerInd: null,
+          showQuestionModal: false,
+          editingQuestionInd: null,
+          squad: inputSquad,
+          currentArticleInd: 0,
+          currentParagraphInd: 0,
+          candidateAnswer: null,
+          questionFormValid: true,
+        };
+        let reRender = () => {};
+
+        // Global accessors for accessing the currently visible article/paragraph.
+        const getArticle = () => {
+          return state.squad.data[state.currentArticleInd];
+        };
+        const getParagraph = () => {
+          const article = getArticle();
+          return article.paragraphs[state.currentParagraphInd];
+        };
+        const getSelectedQa = () => {
+          const paragraph = getParagraph();
+          return state.selectedQaInd !== null ? paragraph.qas[state.selectedQaInd] : null;
+        };
+
+        const handleQuestionClick = (e, ind) => {
+          e.preventDefault();
+          if (ind === state.selectedQaInd) {
+            state.selectedQaInd = null;
+          } else {
+            // don't allow selecting impossible questions
+            const paragraph = getParagraph();
+            if (paragraph.qas[ind].is_impossible) {
+              return;
+            }
+
+            state.selectedQaInd = ind;
+            state.selectedAnswerInd = null;
+          }
+          reRender();
+        };
+
+        // Uuid generation: https://www.ietf.org/rfc/rfc4122.txt
+        const uuidv4 = () => {
+          return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+            var r = (Math.random() * 16) | 0,
+              v = c == "x" ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          });
+        };
+
+        // Range merging
+        const mergeR = (ranges) => {
+          const newRanges = [...ranges];
+          newRanges.sort((a, b) => {
+            return a[0] - b[0] || a[1] - b[1];
+          });
+
+          const merged = [];
+          let current = null;
+          for (const range of newRanges) {
+            if (!current || range[0] > current[1]) {
+              merged.push(range);
+              current = range;
+              continue;
+            }
+
+            current[1] = Math.max(range[1], current[1]);
+          }
+          return merged;
+        };
+
+        const closeModal = () => {
+          state.showQuestionModal = false;
+          state.editingQuestionInd = null;
+          state.candidateAnswer = null;
+          window.getSelection().empty();
+          reRender();
+        };
+
+        const handleShowModal = () => {
+          state.showQuestionModal = true;
+          reRender();
+        };
+
+        const handleSubmitQuestion = () => {
+          const paragraph = getParagraph();
+
+          const questionInputEl = document.getElementById("question-input");
+          const text = questionInputEl.value;
+          questionInputEl.value = "";
+
+          if (!text) {
+            state.questionFormValid = false;
+
+            reRender();
+            return;
+          }
+          state.questionFormValid = true;
+
+          state.showQuestionModal = false;
+          state.selectedQaInd = null;
+
+          // Check if we're editing a question, if so, simply update that question and reRender/return.
+          if (state.editingQuestionInd !== null) {
+            const qa = paragraph.qas[state.editingQuestionInd];
+            qa.question = text;
+            state.editingQuestionInd = null;
+
+            reRender();
+            return;
+          }
+
+          // If the paragraph has a value ignore it.
+          for (let i = 0; i < paragraph.qas.length; i++) {
+            const qa = paragraph.qas[i];
+            if (qa.question === text) {
+              qa.answers.push(state.candidateAnswer);
+              state.selectedQaInd = i;
+              reRender();
+              return;
+            }
+          }
+
+          // Otherwise we're adding a new question, so push it to our questions list.
+          const isImpossible = state.candidateAnswer === null;
+          if (!isImpossible) {
+            state.selectedQaInd = paragraph.qas.length;
+          }
+
+          paragraph.qas.push({
+            question: text,
+            id: uuidv4(),
+            answers: isImpossible ? [] : [state.candidateAnswer],
+            is_impossible: isImpossible,
+          });
+          state.candidateAnswer = null;
+          reRender();
+        };
+
+        const questionModal = (editingQuestionInd, hasCandidateAnswer) => {
+          const isImpossible = !hasCandidateAnswer && editingQuestionInd === null;
+          // Question modal may pop-up for question edits, handle this case.
+          let curText = "";
+          if (editingQuestionInd !== null) {
+            const paragraph = getParagraph();
+            const editingQa = paragraph.qas[editingQuestionInd];
+            curText = editingQa.question;
+          }
+
+          const paragraph = getParagraph();
+
+          return html`
+            <div
+              class="modal fade show"
+              style="display: block;"
+              id="exampleModal"
+              tabindex="-1"
+              role="dialog"
+              aria-hidden="true"
+            >
+              <div class="modal-dialog" role="document">
+                <div class="modal-content">
+                  <form>
+                    <div class="modal-body">
+                      <div class="form-group">
+                        <label for="question-input"
+                          >${isImpossible
+                            ? "What is the impossible question?"
+                            : "What is the question for the highlighted answer?"}</label
+                        >
+                        <div class="d-flex mt-lg-3">
+                          <input
+                            style="flex: 1;"
+                            list=${!hasCandidateAnswer ? "" : "question-input-list"}
+                            id="question-input"
+                            name="question-choice"
+                            autocomplete="off"
+                            autofocus
+                            value=${curText}
+                          />
+                          <datalist id="question-input-list">
+                            ${paragraph.qas
+                              .filter((qa) => !qa.is_impossible)
+                              .map((qa) => html`<option value="${qa.question}"></option>`)}
+                          </datalist>
+                        </div>
+                      </div>
+                    </div>
+                  </form>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal" @click=${closeModal}>
+                      Close
+                    </button>
+                    <button type="button" class="btn btn-primary" @click=${handleSubmitQuestion}>Add</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="modal-backdrop fade show" id="backdrop" style="display: block;"></div>
+          `;
+        };
+
+        const addQuestionForm = (questionFormValid) => html`
+          <div class="my-3">
+            <label name="question" for="question-input" class="form-label">Question Text</label>
+            <input
+              name="question"
+              type="text"
+              @change=${(e) => console.log(e)}
+              class="form-control ${questionFormValid ? "" : "is-invalid"}"
+              id="question-input"
+              placeholder="What is the airspeed velocity of an unladen swallow?"
+            />
+            <div class="invalid-feedback">Please populate the question text.</div>
+          </div>
+        `;
+
+        const trashCanIcon = html`
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            fill="currentColor"
+            class="bi bi-trash"
+            viewBox="0 0 16 16"
+          >
+            <path
+              d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"
+            />
+            <path
+              fill-rule="evenodd"
+              d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4L4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"
+            />
+          </svg>
+        `;
+
+        const trashButton = (onDelete) =>
+          html`<button @click=${onDelete} type="button" class="btn btn-secondary btn-sm border border-white">
+            ${trashCanIcon}
+          </button>`;
+
+        const editButton = (onEdit) =>
+          html`<button @click=${onEdit} type="button" class="btn btn-secondary btn-sm border border-white">
+            Edit
+          </button>`;
+
+        const handleAnswerClick = (e, ind) => {
+          if (state.selectedAnswerInd === ind) {
+            state.selectedAnswerInd = null;
+          } else {
+            state.selectedAnswerInd = ind;
+          }
+
+          reRender();
+        };
+
+        const handleDeleteAnswer = (e, ind) => {
+          e.stopPropagation();
+          const qa = getSelectedQa();
+          if (!qa) {
+            return;
+          }
+          qa.answers.splice(ind, 1);
+          state.selectedAnswerInd = null;
+
+          reRender();
+        };
+
+        const answerLine = (ind, answerText) => html`
+          <li
+            @click=${(e) => handleAnswerClick(e, ind)}
+            class="d-flex list-group-item align-items-center ${ind === state.selectedAnswerInd
+              ? "bg-secondary text-light"
+              : ""}"
+          >
+            <span>${trashButton((e) => handleDeleteAnswer(e, ind))}</span>
+            <span style="flex: 1; min-width: 0; overflow: hidden;" class="d-inline-block text-truncate ms-xl-3"
+              >${answerText}</span
+            >
+          </li>
+        `;
+
+        const handleDeleteQuestion = (e, ind) => {
+          e.stopPropagation();
+          const paragraph = getParagraph();
+          if (!paragraph) {
+            return;
+          }
+          paragraph.qas.splice(ind, 1);
+          state.selectedAnswerInd = null;
+          state.selectedQaInd = null;
+
+          reRender();
+        };
+
+        const handleEditQuestion = (e, ind) => {
+          e.stopPropagation();
+          state.editingQuestionInd = ind;
+          state.showQuestionModal = true;
+          reRender();
+        };
+
+        const question = (ind, questionText, answers, collapsed, isImpossible) => html`
+          <div class="accordion-item">
+            <h2 class="accordion-header">
+              <button
+                @click=${(e) => handleQuestionClick(e, ind)}
+                class="no-deselect accordion-button ${collapsed ? "collapsed" : ""} ${isImpossible
+                  ? "accordion-disabled"
+                  : ""}"
+                type="button"
+                ?disabled=${isImpossible}
+              >
+                <span class="me-sm-3">${trashButton((e) => handleDeleteQuestion(e, ind))}</span>
+                <span class="me-xl-3">${editButton((e) => handleEditQuestion(e, ind))}</span>
+                ${questionText} ${isImpossible ? html`<span class="ms-3 text-muted">(Is Impossible)</span>` : ""}
+              </button>
+            </h2>
+            <div class="accordion-collapse collapse ${collapsed ? "" : "show"}">
+              <ul class="list-group">
+                <div class="accordion-body">${answers.map((answer, ind) => answerLine(ind, answer.text))}</div>
+              </ul>
+            </div>
+          </div>
+        `;
+
+        const questionPanel = (
+          qas,
+          selectedQaInd,
+          hasCandidateAnswer,
+          showQuestionModal,
+          questionFormValid,
+          editingQuestionInd
+        ) => html`
+          <div
+            class="d-flex flex-column w-50 m-3 px-3 pt-2 pb-3 shadow rounded-3"
+            style="background-color: #eee; min-width: 0;"
+          >
+            <h3 class="mb-xl-3">Q & A</h3>
+            <div class="accordion bg-light overflow-scroll">
+              ${qas.map((qa, ind) => question(ind, qa.question, qa.answers, ind !== selectedQaInd, qa.is_impossible))}
+            </div>
+            ${showQuestionModal ? questionModal(editingQuestionInd, hasCandidateAnswer) : ""}
+            <button
+              type="button"
+              class="btn btn-${hasCandidateAnswer ? "primary" : "secondary"} mt-3 no-deselect"
+              @click=${handleShowModal}
+              data-bs-toggle="tooltip"
+              data-bs-placement="bottom"
+              id="add-question-button"
+              title="Highlight text in the context pane to add a regular question"
+            >
+              ${hasCandidateAnswer ? "Add Question" : "Add Impossible Question"}
+            </button>
+          </div>
+        `;
+
+        const isSelectionEmpty = () => {
+          const selection = window.getSelection();
+          if (selection.rangeCount === 0) return true;
+          if (selection.anchorNode === selection.focusNode && selection.anchorOffset === selection.focusOffset)
+            return true;
+          return false;
+        };
+
+        const handleSelect = () => {
+          if (isSelectionEmpty()) {
+            return;
+          }
+          const selection = window.getSelection();
+          const range = selection.getRangeAt(0);
+
+          const textField = document.getElementById("text-field");
+          const it = document.createNodeIterator(textField, NodeFilter.SHOW_TEXT);
+
+          let startIndex = null;
+          let endIndex = null;
+
+          let curIndex = 0;
+          while (startIndex === null || endIndex === null) {
+            const curNode = it.nextNode();
+            if (!curNode) return;
+            if (curNode === range.startContainer) {
+              startIndex = curIndex + range.startOffset;
+            }
+            if (curNode === range.endContainer) {
+              endIndex = curIndex + range.endOffset;
+            }
+            curIndex += curNode.length;
+          }
+
+          const paragraph = getParagraph();
+          const qa = state.selectedQaInd !== null ? paragraph.qas[state.selectedQaInd] : null;
+          const text = paragraph.context.substring(startIndex, endIndex);
+
+          const answer = {
+            answer_id: uuidv4(),
+            question_id: qa ? qa.id : null,
+            text: text,
+            answer_start: startIndex,
+            answer_category: null,
+          };
+
+          state.candidateAnswer = answer;
+
+          reRender();
+        };
+
+        const handleClickSubmit = () => {
+          const form = document.querySelector("crowd-form");
+          form.submit();
+        };
+
+        const calcNewArticleParagraph = (direction) => {
+          const articles = state.squad.data;
+          const article = getArticle();
+
+          let newParagraphInd = state.currentParagraphInd + direction;
+
+          if (newParagraphInd === article.paragraphs.length) {
+            // Flow onto the next article.
+            if (state.currentArticleInd === articles.length - 1) return null;
+            return {
+              newParagraphInd: 0,
+              newArticleInd: state.currentArticleInd + 1,
+            };
+          } else if (newParagraphInd === -1) {
+            // Flow back to last paragraph of previous article.
+            if (state.currentArticleInd === 0) return null;
+            const prevArticle = articles[state.currentArticleInd - 1];
+            return {
+              newParagraphInd: prevArticle.paragraphs.length - 1,
+              newArticleInd: state.currentArticleInd - 1,
+            };
+          } else {
+            return {
+              newParagraphInd: newParagraphInd,
+              newArticleInd: state.currentArticleInd,
+            };
+          }
+        };
+
+        // Direction is +1 or -1 only.
+        const handleParagraphChange = (direction) => {
+          const updates = calcNewArticleParagraph(direction);
+          state.currentParagraphInd = updates.newParagraphInd;
+          state.currentArticleInd = updates.newArticleInd;
+          state.selectedQaInd = null;
+          state.selectedAnswerInd = null;
+
+          reRender();
+        };
+
+        const handleClearSelection = () => {
+          if (state.showQuestionModal) {
+            return;
+          }
+          if (isSelectionEmpty()) {
+            return;
+          }
+          state.candidateAnswer = null;
+          window.getSelection().empty();
+          reRender();
+        };
+
+        const contextPanel = (text) => {
+          return html`
+            <div
+              class="d-flex flex-column w-50 m-3 px-3 pt-2 pb-3 shadow rounded-3 overflow-hidden"
+              style="background-color: #eee;"
+            >
+              <h3 class="mb-xl-3">Context</h3>
+              <div class="flex-fill card overflow-hidden">
+                <!-- prettier-ignore -->
+                <div
+                id="text-field"
+                style="outline: none; white-space: pre-line; overflow-y: scroll;"
+                class="card-body"
+                @mouseup=${handleSelect}
+                @dblclick=${handleSelect}
+                tabindex="0"
+              >${text}</div>
+              </div>
+              <div class="card mt-xl-3">
+                <div class="card-body">Highlight the above text to add a new question.</div>
+              </div>
+            </div>
+          `;
+        };
+
+        const topBar = (articleName, articleInd, totalArticle, paragraphInd, totalParagraph, completion) => html`
+          <div>
+            <nav class="navbar navbar-dark bg-dark">
+              <span class="navbar-brand ms-xl-3">Squad 2.0 Annotator</span>
+              <span class="d-flex align-items-center">
+                <label class="me-xl-2 text-muted" for="article-id">Article Name</label>
+                <span id="article-id" class="me-xl-3 text-light"
+                  >${articleName} (${articleInd + 1}/${totalArticle})</span
+                >
+                <label class="me-xl-2 text-muted" for="paragraph-id navbar-brand">Paragraph</label>
+                <span id="paragraph-id" class="text-light me-xl-3">${paragraphInd + 1}/${totalParagraph}</span>
+                <span class="mx-xl-3">
+                  <button
+                    @click=${() => handleParagraphChange(-1)}
+                    class="btn btn-secondary my-2 my-sm-0"
+                    ?disabled=${calcNewArticleParagraph(-1) === null}
+                    type="button"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    @click=${() => handleParagraphChange(+1)}
+                    class="btn btn-secondary my-2 my-sm-0"
+                    ?disabled=${calcNewArticleParagraph(+1) === null}
+                    type="button"
+                  >
+                    Next
+                  </button>
+                </span>
+                <progress max="100" value="${completion}">${completion}%</progress>
+                <button @click=${handleClickSubmit} class="btn btn-success mx-xl-3 my-sm-0" type="button">
+                  Submit
+                </button>
+              </span>
+            </nav>
+          </div>
+        `;
+
+        // Compute the total progress through the job.
+        const getCompletion = (appState) => {
+          let paragraphInd = 0;
+          let totalParagraphs = 0;
+          for (let i = 0; i < appState.squad.data.length; i++) {
+            const paragraphs = appState.squad.data[i].paragraphs;
+            totalParagraphs += paragraphs.length;
+            if (i < appState.currentArticleInd) {
+              paragraphInd += paragraphs.length;
+            } else if (i === appState.currentArticleInd) {
+              paragraphInd += appState.currentParagraphInd;
+            }
+          }
+
+          return (100 * (paragraphInd + 1)) / totalParagraphs;
+        };
+
+        const app = (appState) => {
+          const article = getArticle();
+          const paragraph = getParagraph();
+          const textContext = paragraph.context;
+          const numArticles = appState.squad.data.length;
+          const completion = getCompletion(appState);
+
+          return html`
+            <div class="d-flex flex-column overflow-hidden" style="width: 100%; height: 100%; display: flex;">
+              ${topBar(
+                article.title,
+                state.currentArticleInd,
+                numArticles,
+                appState.currentParagraphInd,
+                article.paragraphs.length,
+                completion
+              )}
+              <div class="d-flex flex-grow-1 overflow-hidden">
+                ${questionPanel(
+                  paragraph.qas,
+                  appState.selectedQaInd,
+                  appState.candidateAnswer !== null,
+                  appState.showQuestionModal,
+                  appState.questionFormValid,
+                  appState.editingQuestionInd
+                )}
+                ${contextPanel(textContext)}
+              </div>
+            </div>
+          `;
+        };
+
+        const applyPostDOMHighlight = (appState) => {
+          // Render highlights based on current appState. This is decoupled from the DOM render
+          // since we're using mark.js to do it.
+          if (!markInstance) {
+            markInstance = new Mark(document.getElementById("text-field"));
+          }
+          markInstance.unmark();
+          const paragraph = getParagraph();
+
+          const renderQas = paragraph.qas.filter((qa, ind) => {
+            if (appState.selectedQaInd === null) {
+              return true;
+            }
+            return appState.selectedQaInd === ind;
+          });
+
+          let renderAnswers = [];
+
+          if (state.showQuestionModal && state.candidateAnswer !== null) {
+            // Provide some temporary highlighting to the candidate answer so it doesn't
+            // disappear while the question modal is opened.
+            renderAnswers.push(state.candidateAnswer);
+          } else {
+            renderQas.forEach((qa) => {
+              renderAnswers = renderAnswers.concat(qa.answers);
+            });
+
+            if (appState.selectedQaInd !== null && appState.selectedAnswerInd !== null) {
+              renderAnswers = renderAnswers.filter((_, ind) => ind === appState.selectedAnswerInd);
+            }
+          }
+
+          let ranges = renderAnswers.map((answer) => [answer.answer_start, answer.answer_start + answer.text.length]);
+          if (ranges.length === 0) {
+            return;
+          }
+
+          // Consolidate ranges, markRanges behaves strangely with overlapping ranges.
+          const merged = mergeR(ranges);
+          for (const range of merged) {
+            markInstance.markRanges([
+              {
+                start: range[0],
+                length: range[1] - range[0],
+              },
+            ]);
+          }
+        };
+
+        const updateCrowdFormSubmit = (appState) => {
+          const submitElement = document.getElementById("submission");
+          submitElement.value = JSON.stringify(appState.squad);
+        };
+
+        const enableTooltips = (appState) => {
+          const button = document.getElementById("add-question-button");
+          let tooltip = bootstrap.Tooltip.getInstance(button);
+          if (tooltip === null) {
+            tooltip = new bootstrap.Tooltip(button);
+          }
+          if (appState.candidateAnswer !== null) {
+            tooltip.disable();
+          } else {
+            tooltip.enable();
+          }
+        };
+
+        reRender = () => {
+          render(app(state), root);
+          applyPostDOMHighlight(state);
+          updateCrowdFormSubmit(state);
+          enableTooltips(state);
+          console.log("State: ", state);
+        };
+
+        document.addEventListener("mousedown", (e) => {
+          if (e.target.className && e.target.className.includes("no-deselect")) {
+            // Don't clear our candidate answer when selecting add question button or
+            // selecting a question type to add the selection to.
+            return;
+          }
+
+          // If we click somewhere that's not a button that uses selection, clear the candidate solution.
+          handleClearSelection();
+        });
+        reRender();
+      });
+    </script>
+  </body>
+</html>
