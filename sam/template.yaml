@@ -74,7 +74,7 @@ Resources:
                 Resource: !Sub arn:aws:s3:::${Prefix}-${AWS::AccountId}-${AWS::Region}-squad-sagemaker-input/*
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-  LabelerExecutionRole:
+  SageMakerRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -85,9 +85,10 @@ Resources:
               Service: sagemaker.amazonaws.com
             Effect: Allow
             Sid: ""
-      RoleName: !Sub ${Prefix}-labeler-execution-role
+      RoleName: !Sub ${Prefix}-sagemaker-role
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSageMakerGroundTruthExecution
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
       MaxSessionDuration: 43200
   NotebookRole:
     Type: AWS::IAM::Role
@@ -136,18 +137,25 @@ Resources:
                 # to generate all of this, generate in cloudformation and pass into notebook.
 
                 import json
+                import subprocess
 
                 config = {
                   "PreLabelTaskLambdaArn": "${PreLabelTaskLambda.Arn}",
-                  "PreLabelTaskLambdaArn": "${PostLabelTaskLambda.Arn}",
+                  "PostLabelTaskLambdaArn": "${PostLabelTaskLambda.Arn}",
                   "LabelingJobInputBucket": "${LabelingJobInputBucket.Arn}",
-                  "LabelerExecutionRoleArn": "${LabelerExecutionRole.Arn}",
+                  "SageMakerRoleArn": "${SageMakerRole.Arn}",
                 }
                 print("Configuration variables:", config)
-                filename = "/home/ec2-user/SageMaker/gt-hf-squad-config.json"
+                filename = "/home/ec2-user/SageMaker/hf-gt-custom-qa.json"
                 print(f"Writing configuration to {filename}")
                 with open(filename, "w") as f:
                   json.dump(config, f)
+
+                try:
+                  subprocess.run("git clone https://github.com/aws-samples/hf-gt-custom-qa /home/ec2-user/SageMaker/hf-gt-custom-qa", shell=True)
+                except Exception as e:
+                  print("Failed to clone repo - might still be private?")
+                  print(e)
 
   CodeNotebookInstance:
     Type: AWS::SageMaker::NotebookInstance
@@ -186,7 +194,7 @@ Outputs:
   LabelingJobBucketName:
     Description: "Bucket with appropriate CORS to serve as input bucket"
     Value: !Ref LabelingJobInputBucket
-  LabelerExecutionRoleArn:
+  SageMakerRoleArn:
     Description: "Role to use with create_labeling_job API in SageMaker Ground Truth"
-    Value: !GetAtt LabelerExecutionRole.Arn
+    Value: !GetAtt SageMakerRole.Arn
 
