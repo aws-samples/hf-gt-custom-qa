@@ -290,7 +290,7 @@ Resources:
                 config = {
                   "PreLabelTaskLambdaArn": "${PreLabelTaskLambda.Arn}",
                   "PostLabelTaskLambdaArn": "${PostLabelTaskLambda.Arn}",
-                  "LabelingJobInputBucket": "${LabelingJobInputBucket}",
+                  "LabelingJobInputBucket": "${LabelingJobInputBucket.Arn}",
                   "SageMakerRoleArn": "${SageMakerRole.Arn}",
                 }
                 print("Configuration variables:", config)
