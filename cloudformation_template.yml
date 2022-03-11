@@ -136,7 +136,7 @@ Resources:
                       "source": source,
                   }
               }
-      Handler: pre_label_task_lambda.lambda_handler
+      Handler: index.lambda_handler
       Runtime: python3.8
       Role: !GetAtt PrelabelingLambdaSMGTExecutionRole.Arn
       Timeout: 3
@@ -265,7 +265,7 @@ Resources:
               print(consolidated_output)
               print(" ------------------------- ")
               return consolidated_output
-      Handler: post_label_task_lambda.lambda_handler
+      Handler: index.lambda_handler
       Runtime: python3.8
       Role: !GetAtt ConsolidationLambdaSMGTExecutionRole.Arn
       Timeout: 3
@@ -290,7 +290,7 @@ Resources:
                 config = {
                   "PreLabelTaskLambdaArn": "${PreLabelTaskLambda.Arn}",
                   "PostLabelTaskLambdaArn": "${PostLabelTaskLambda.Arn}",
-                  "LabelingJobInputBucket": "${LabelingJobInputBucket.Arn}",
+                  "LabelingJobInputBucket": "${LabelingJobInputBucket}",
                   "SageMakerRoleArn": "${SageMakerRole.Arn}",
                 }
                 print("Configuration variables:", config)
@@ -322,7 +322,7 @@ Resources:
   LabelingJobInputBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub ${Prefix}-${AWS::AccountId}-${AWS::Region}-input
+      BucketName: !Sub ${Prefix}-${AWS::AccountId}-${AWS::Region}-sagemaker-input
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -348,4 +348,3 @@ Outputs:
   SageMakerRoleArn:
     Description: "Role to use with create_labeling_job API in SageMaker Ground Truth"
     Value: !GetAtt SageMakerRole.Arn
-
